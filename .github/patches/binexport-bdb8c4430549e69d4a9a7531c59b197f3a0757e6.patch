@@ -1,25 +1,83 @@
 diff --git a/cmake/FindIdaSdk.cmake b/cmake/FindIdaSdk.cmake
-index 9e0cfa1..811fa7b 100644
+index 307f192..8f83322 100644
 --- a/cmake/FindIdaSdk.cmake
 +++ b/cmake/FindIdaSdk.cmake
 @@ -99,6 +99,7 @@ else()
  endif()
-
+ 
  message(STATUS "IDA_SDK_VERSION = ${IDA_SDK_VERSION}")
 +add_compile_definitions(IDA_SDK_VERSION=${IDA_SDK_VERSION})
-
+ 
  # Define some platform specific variables for later use.
  set(_so "${CMAKE_SHARED_LIBRARY_SUFFIX}")
-@@ -213,9 +214,9 @@ if(APPLE)
-                     -output "${_ida64_universal_lib}"
+@@ -193,37 +194,49 @@ if(APPLE)
+     )
+   else()  # IDA SDK 9.0+
+     _ida_get_libpath_suffixes(_ida64_x64_suffixes "x64_mac_clang_64")
+-    find_path(IdaSdk_LIBPATH64_X64 libida.dylib
++    find_path(IdaSdk_LIBPATH64_X64 NAMES libida.tbd libida.dylib
+       PATHS "${IdaSdk_DIR}/lib" PATH_SUFFIXES ${_ida64_x64_suffixes}
+       NO_DEFAULT_PATH REQUIRED
+     )
+     _ida_get_libpath_suffixes(_ida64_arm64_suffixes "arm64_mac_clang_64")
+-    find_path(IdaSdk_LIBPATH64_ARM64 libida.dylib
++    find_path(IdaSdk_LIBPATH64_ARM64 NAMES libida.tbd libida.dylib
+       PATHS "${IdaSdk_DIR}/lib" PATH_SUFFIXES ${_ida64_arm64_suffixes}
+       NO_DEFAULT_PATH REQUIRED
+     )
+-    if(NOT TARGET ida64_universal)
+-      set(_ida64_universal_lib
+-        "${CMAKE_CURRENT_BINARY_DIR}/libida_universal.dylib"
+-        CACHE INTERNAL ""
++    add_library(ida64 SHARED IMPORTED)
++    if(EXISTS "${IdaSdk_LIBPATH64_ARM64}/libida.tbd")
++      set(_ida_tbd "${IdaSdk_LIBPATH64_ARM64}/libida.tbd")
++    elseif(EXISTS "${IdaSdk_LIBPATH64_X64}/libida.tbd")
++      set(_ida_tbd "${IdaSdk_LIBPATH64_X64}/libida.tbd")
++    endif()
++    if(_ida_tbd)
++      message(STATUS "Using IDA text-based stub library: ${_ida_tbd}")
++      set_target_properties(ida64 PROPERTIES
++        IMPORTED_LOCATION "${_ida_tbd}"
+       )
+-      # Create a new "universal" library to allow the linker to select the
+-      # correct one per architecture. Ideally, Hex Rays would just compile
+-      # libida64.dylib as a universal bundle.
+-      add_custom_target(ida64_universal
+-        DEPENDS "${IdaSdk_LIBPATH64_ARM64}/libida.dylib"
+-                "${IdaSdk_LIBPATH64_X64}/libida.dylib"
+-        BYPRODUCTS "${_ida64_universal_lib}"
+-        COMMAND lipo -create "${IdaSdk_LIBPATH64_ARM64}/libida.dylib"
+-                            "${IdaSdk_LIBPATH64_X64}/libida.dylib"
+-                    -output "${_ida64_universal_lib}"
++    else()
++      if(NOT TARGET ida64_universal)
++        set(_ida64_universal_lib
++          "${CMAKE_CURRENT_BINARY_DIR}/libida_universal.dylib"
++          CACHE INTERNAL ""
++        )
++        # Create a new "universal" library to allow the linker to select the
++        # correct one per architecture. Ideally, Hex Rays would just compile
++        # libida64.dylib as a universal bundle.
++        add_custom_target(ida64_universal
++          DEPENDS "${IdaSdk_LIBPATH64_ARM64}/libida.dylib"
++                  "${IdaSdk_LIBPATH64_X64}/libida.dylib"
++          BYPRODUCTS "${_ida64_universal_lib}"
++          COMMAND lipo -create "${IdaSdk_LIBPATH64_ARM64}/libida.dylib"
++                              "${IdaSdk_LIBPATH64_X64}/libida.dylib"
++                      -output "${_ida64_universal_lib}"
++        )
++      endif()
++      add_dependencies(ida64 ida64_universal)
++      set_target_properties(ida64 PROPERTIES
++        IMPORTED_LOCATION "${_ida64_universal_lib}"
        )
      endif()
 -    add_library(ida SHARED IMPORTED)
 -    add_dependencies(ida ida64_universal)
 -    set_target_properties(ida PROPERTIES
-+    add_library(ida64 SHARED IMPORTED)
-+    add_dependencies(ida64 ida64_universal)
-+    set_target_properties(ida64 PROPERTIES
-       IMPORTED_LOCATION "${_ida64_universal_lib}"
-     )
-
+-      IMPORTED_LOCATION "${_ida64_universal_lib}"
+-    )
+ 
+   endif()
+ 

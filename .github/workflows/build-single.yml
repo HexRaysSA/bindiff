@@ -29,39 +29,31 @@ jobs:
       ida_version: ${{ steps.resolve.outputs.ida_version }}
       release_tag: ${{ steps.resolve.outputs.release_tag }}
     steps:
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          ignore-empty-workdir: true
-          enable-cache: false
-
       - name: Resolve inputs
         id: resolve
         env:
-          HCLI_API_KEY: ${{ secrets.HCLI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_VERSION: ${{ github.event.inputs.ida_version || github.event.client_payload.ida_version || 'latest' }}
           INPUT_TAG: ${{ github.event.inputs.release_tag || github.event.client_payload.release_tag || 'latest' }}
         shell: bash
         run: |
+          # IDA versions covered by the SDK repo (tags vX.Y.Z-release / vX.Y.Z-sdk.N)
+          available=$(git ls-remote --tags --refs https://github.com/HexRaysSA/ida-sdk \
+            | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+-(release|sdk\.[0-9]+)$' \
+            | sed -E 's/^v([0-9]+\.[0-9]+)\..*/\1/' \
+            | sort -Vu)
+
           # Resolve IDA version
           if [ "$INPUT_VERSION" = "latest" ]; then
-            version=$(uvx --from ida-hcli hcli --disable-updates download --list-tags 2>/dev/null \
-              | grep -oP 'ida-pro:\K[0-9]+\.[0-9]+(?=:)' \
-              | sort -Vu \
-              | awk -F. '$1 >= 9' \
-              | tail -1)
+            version=$(echo "$available" | tail -1)
             if [ -z "$version" ]; then
-              echo "ERROR: Could not resolve latest IDA version from hcli"
+              echo "ERROR: Could not resolve latest IDA version from the SDK repo"
               exit 1
             fi
             echo "Resolved IDA version 'latest' to $version"
           else
             version="$INPUT_VERSION"
             # Verify the requested version exists
-            available=$(uvx --from ida-hcli hcli --disable-updates download --list-tags 2>/dev/null \
-              | grep -oP 'ida-pro:\K[0-9]+\.[0-9]+(?=:)' \
-              | sort -Vu)
             if ! echo "$available" | grep -qx "$version"; then
               echo "ERROR: IDA version $version not found. Available versions:"
               echo "$available"
@@ -142,37 +134,39 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Download IDA SDK
+      - name: Fetch IDA SDK
         shell: bash
-        env:
-          HCLI_API_KEY: ${{ secrets.HCLI_API_KEY }}
         run: |
-          SDK_COMPACT=$(echo "$IDA_VERSION" | tr -d '.')
-          SDK_SLUG="release/${IDA_VERSION}/sdk-and-utilities/idasdk${SDK_COMPACT}.zip"
-          echo "Downloading SDK: $SDK_SLUG"
-
-          uvx --from ida-hcli hcli --disable-updates download "$SDK_SLUG"
-          unzip -q idasdk*.zip -d ./ida-temp/
-
-          PRO_H=$(find ./ida-temp -path '*/include/pro.h' | head -1)
-          if [ -z "$PRO_H" ]; then
-            echo "ERROR: could not locate include/pro.h in the downloaded SDK"
-            find ./ida-temp -maxdepth 3 -type d
+          # Use the newest SDK tag targeting this IDA version. sort -V orders
+          # vX.Y.Z-release before vX.Y.Z-sdk.N, i.e. chronologically.
+          SDK_TAG=$(git ls-remote --tags --refs https://github.com/HexRaysSA/ida-sdk \
+            | grep -oE "v${IDA_VERSION}\.[0-9]+-(release|sdk\.[0-9]+)$" \
+            | sort -V | tail -1)
+          if [ -z "$SDK_TAG" ]; then
+            echo "ERROR: no SDK tag found for IDA $IDA_VERSION"
             exit 1
           fi
-          SDK_ROOT=$(dirname "$(dirname "$PRO_H")")
-          echo "SDK root: $SDK_ROOT"
-          mv "$SDK_ROOT" ./ida-sdk
+          echo "Using SDK tag: $SDK_TAG"
 
-      - name: Setup IDA SDK environment
-        if: matrix.os_name == 'windows' && hashFiles('ida-sdk/allmake.mak') != ''
-        working-directory: ./ida-sdk/
-        shell: cmd
-        run: |
-          REM via: https://hex-rays.com/blog/building-ida-python-on-windows
-          set __EA64__=1
-          set NDEBUG=1
-          make env
+          # Only check out the headers and this platform's stub libraries.
+          case "$RUNNER_OS" in
+            Linux)   LIB_DIRS="/src/lib/x64_linux*_64/" ;;
+            macOS)   LIB_DIRS="/src/lib/*_mac*_64/" ;;
+            Windows) LIB_DIRS="/src/lib/x64_win*_64/" ;;
+          esac
+          git -c advice.detachedHead=false clone --quiet --depth 1 --filter=blob:none --sparse --branch "$SDK_TAG" \
+            https://github.com/HexRaysSA/ida-sdk ida-sdk-git
+          printf '%s\n' /src/include/ /src/plugins/exports.def "$LIB_DIRS" \
+            | git -C ida-sdk-git sparse-checkout set --no-cone --stdin
+          mv ida-sdk-git/src ./ida-sdk
+          rm -rf ida-sdk-git
+
+          if [ ! -f ida-sdk/include/pro.h ]; then
+            echo "ERROR: include/pro.h missing from the SDK checkout"
+            exit 1
+          fi
+          echo "SDK lib dirs:"
+          ls ida-sdk/lib
 
       - name: Checkout bindiff
         uses: actions/checkout@v4
