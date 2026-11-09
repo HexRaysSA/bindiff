@@ -21,24 +21,16 @@ jobs:
     outputs:
       versions: ${{ steps.get-versions.outputs.versions }}
     steps:
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          ignore-empty-workdir: true
-          enable-cache: false
-
       - name: Discover available IDA versions
         id: get-versions
-        env:
-          HCLI_API_KEY: ${{ secrets.HCLI_API_KEY }}
         shell: bash
         run: |
-          # List all available tags and extract unique IDA 9.x+ version numbers,
-          # excluding "latest", service packs (sp), and test builds.
-          versions=$(uvx --from ida-hcli hcli --disable-updates download --list-tags 2>/dev/null \
-            | grep -oP 'ida-pro:\K[0-9]+\.[0-9]+(?=:)' \
+          # The SDK repo tags every IDA release as vX.Y.Z-release and SDK-only
+          # follow-ups as vX.Y.Z-sdk.N. Extract the unique IDA X.Y versions.
+          versions=$(git ls-remote --tags --refs https://github.com/HexRaysSA/ida-sdk \
+            | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+-(release|sdk\.[0-9]+)$' \
+            | sed -E 's/^v([0-9]+\.[0-9]+)\..*/\1/' \
             | sort -Vu \
-            | awk -F. '$1 >= 9' \
             | jq -R -s -c 'split("\n") | map(select(length > 0))')
           echo "versions=$versions" >> "$GITHUB_OUTPUT"
           echo "Discovered IDA versions: $versions"
@@ -82,37 +74,41 @@ jobs:
         # (ultimately an issue with act images)
         uses: astral-sh/setup-uv@v5
 
-      - name: Download IDA SDK ${{ matrix.ida_version }}
+      - name: Fetch IDA SDK ${{ matrix.ida_version }}
         shell: bash
         env:
-          HCLI_API_KEY: ${{ secrets.HCLI_API_KEY }}
+          IDA_VERSION: ${{ matrix.ida_version }}
         run: |
-          SDK_COMPACT=$(echo "${{ matrix.ida_version }}" | tr -d '.')
-          SDK_SLUG="release/${{ matrix.ida_version }}/sdk-and-utilities/idasdk${SDK_COMPACT}.zip"
-          echo "Downloading SDK: $SDK_SLUG"
-
-          uvx --from ida-hcli hcli --disable-updates download "$SDK_SLUG"
-          unzip -q idasdk*.zip -d ./ida-temp/
-
-          PRO_H=$(find ./ida-temp -path '*/include/pro.h' | head -1)
-          if [ -z "$PRO_H" ]; then
-            echo "ERROR: could not locate include/pro.h in the downloaded SDK"
-            find ./ida-temp -maxdepth 3 -type d
+          # Use the newest SDK tag targeting this IDA version. sort -V orders
+          # vX.Y.Z-release before vX.Y.Z-sdk.N, i.e. chronologically.
+          SDK_TAG=$(git ls-remote --tags --refs https://github.com/HexRaysSA/ida-sdk \
+            | grep -oE "v${IDA_VERSION}\.[0-9]+-(release|sdk\.[0-9]+)$" \
+            | sort -V | tail -1)
+          if [ -z "$SDK_TAG" ]; then
+            echo "ERROR: no SDK tag found for IDA $IDA_VERSION"
             exit 1
           fi
-          SDK_ROOT=$(dirname "$(dirname "$PRO_H")")
-          echo "SDK root: $SDK_ROOT"
-          mv "$SDK_ROOT" ./ida-sdk
+          echo "Using SDK tag: $SDK_TAG"
 
-      - name: Setup IDA SDK environment
-        if: matrix.os_name == 'windows' && hashFiles('ida-sdk/allmake.mak') != ''
-        working-directory: ./ida-sdk/
-        shell: cmd
-        run: |
-          REM via: https://hex-rays.com/blog/building-ida-python-on-windows
-          set __EA64__=1
-          set NDEBUG=1
-          make env
+          # Only check out the headers and this platform's stub libraries.
+          case "$RUNNER_OS" in
+            Linux)   LIB_DIRS="/src/lib/x64_linux*_64/" ;;
+            macOS)   LIB_DIRS="/src/lib/*_mac*_64/" ;;
+            Windows) LIB_DIRS="/src/lib/x64_win*_64/" ;;
+          esac
+          git -c advice.detachedHead=false clone --quiet --depth 1 --filter=blob:none --sparse --branch "$SDK_TAG" \
+            https://github.com/HexRaysSA/ida-sdk ida-sdk-git
+          printf '%s\n' /src/include/ /src/plugins/exports.def "$LIB_DIRS" \
+            | git -C ida-sdk-git sparse-checkout set --no-cone --stdin
+          mv ida-sdk-git/src ./ida-sdk
+          rm -rf ida-sdk-git
+
+          if [ ! -f ida-sdk/include/pro.h ]; then
+            echo "ERROR: include/pro.h missing from the SDK checkout"
+            exit 1
+          fi
+          echo "SDK lib dirs:"
+          ls ida-sdk/lib
 
       - name: Checkout bindiff
         # on act, need use v4 instead of v5 due to node24 reference
