@@ -3,8 +3,8 @@
   "plugin": {
     "name": "bindiff",
     "entryPoint": "bindiff8_ida64",
-    "version": "8.0.0",
-    "idaVersions": ["9.0", "9.1", "9.2"],
+    "version": "8.0.1",
+    "idaVersions": ["9.0", "9.1", "9.2", "9.3", "9.4", "9.5"],
     "platforms": [
       "windows-x86_64",
       "linux-x86_64",
@@ -25,7 +25,7 @@
       "patch-analysis"
     ],
     "urls": {
-      "repository": "https://github.com/HexRays-plugin-contributions/bindiff"
+      "repository": "https://github.com/HexRaysSA/bindiff"
     },
     "authors": [
       {
