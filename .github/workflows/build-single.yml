@@ -191,18 +191,28 @@ jobs:
           path: binexport
           ref: 644786690fcb6bcf6d42a76e7d8b65056176054d
 
+      # When building for an existing release, bindiff is checked out at the
+      # release tag, whose BinExport patches may predate the SDK being built
+      # against. Always take the patches from the ref this workflow runs from.
+      - name: Checkout CI patches
+        uses: actions/checkout@v4
+        with:
+          path: ci
+          sparse-checkout: .github/patches
+          sparse-checkout-cone-mode: false
+
       - name: Patch BinExport FindIdaSdk for open-sourced SDK (9.4+) lib dirs
         shell: bash
         run: |
           cd binexport
-          git apply --verbose ../bindiff/.github/patches/binexport-findidasdk-sdk94-libdirs.patch
+          git apply --verbose ../ci/.github/patches/binexport-findidasdk-sdk94-libdirs.patch
 
       - name: Patch BinExport for IDA SDK 9.x on macOS
         if: matrix.os_name == 'macos'
         shell: bash
         run: |
           cd binexport
-          git apply --verbose ../bindiff/.github/patches/binexport-bdb8c4430549e69d4a9a7531c59b197f3a0757e6.patch
+          git apply --verbose ../ci/.github/patches/binexport-bdb8c4430549e69d4a9a7531c59b197f3a0757e6.patch
 
       - name: Configure BinDiff build
         working-directory: ./bindiff/
